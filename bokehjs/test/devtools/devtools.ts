@@ -121,7 +121,7 @@ function encode(s: string): string {
 }
 
 type Suite = {description: string, suites: Suite[], tests: Test[]}
-type Test = {description: string, skip: boolean, threshold?: number, retries?: number, dpr?: number, no_image?: boolean}
+type Test = {description: string, skip: boolean, omit?: boolean, threshold?: number, retries?: number, dpr?: number, no_image?: boolean}
 
 type Result = {error: {str: string, stack?: string} | null, time: number, state?: State, bbox?: Box}
 
@@ -296,9 +296,9 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         existing_png?: Buffer
       }
 
-      type TestItem = [Suite[], Test, Status]
+      type TestCase = [Suite[], Test, Status]
 
-      function* iter({suites, tests}: Suite, parents: Suite[] = []): Iterable<TestItem> {
+      function* iter({suites, tests}: Suite, parents: Suite[] = []): Iterable<TestCase> {
         for (const suite of suites) {
           yield* iter(suite, parents.concat(suite))
         }
@@ -317,40 +317,40 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
       }
 
       const all_tests = [...iter(top_level)]
-      const test_suite = all_tests
 
       if (randomize) {
         const random = new Random(seed)
         console.log(`randomizing with seed ${seed}`)
-        shuffle(test_suite, random)
+        shuffle(all_tests, random)
       }
 
       if (keyword != null || grep != null) {
         if (keyword != null) {
           const keywords = keyword
-          for (const [suites, test] of test_suite) {
+          for (const [suites, test] of all_tests) {
             if (!keywords.some((keyword) => description(suites, test).includes(keyword))) {
-              test.skip = true
+              test.omit = true
             }
           }
         }
 
         if (grep != null) {
           const regexes = grep.map((re) => new RegExp(re))
-          for (const [suites, test] of test_suite) {
+          for (const [suites, test] of all_tests) {
             if (!regexes.some((regex) => description(suites, test).match(regex) != null)) {
-              test.skip = true
+              test.omit = true
             }
           }
         }
       }
 
-      if (test_suite.length == 0) {
-        fail("nothing to test")
-      }
+      const selected_tests = all_tests.filter(([, test]) => test.omit !== true)
 
-      if (!test_suite.some(([, test]) => !test.skip)) {
-        fail("nothing to test because all tests were skipped")
+      const num_all_tests = all_tests.length
+      const num_selected_tests = selected_tests.length
+
+      if (num_selected_tests == 0) {
+        fail("nothing to test")
       }
 
       const baselines_root = argv["baselines-root"]
@@ -359,7 +359,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
       if (baselines_root != null) {
         const baseline_paths = []
 
-        for (const test_case of test_suite) {
+        for (const test_case of selected_tests) {
           const [suites, test, _status] = test_case
           const baseline_name = encode(description(suites, test, "__"))
           const baseline_path = path.join(baselines_root, platform, baseline_name)
@@ -369,7 +369,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         const baselines = await load_baselines(baseline_paths, ref)
 
         for (let i = 0; i < baselines.length; i++) {
-          const [,, status] = test_suite[i]
+          const [,, status] = selected_tests[i]
           const baseline = baselines[i]
           if (baseline.blf != null) {
             status.existing_blf = baseline.blf
@@ -381,14 +381,14 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
       }
 
       const progress = new Bar({
-        format: "{bar} {percentage}% | {value} of {total}{failures}{skipped} | {duration}s",
+        format: "{bar} {percentage}% | {value} of {total}{failed}{skipped} | {duration}s",
         stream: process.stdout,
         noTTYOutput: true,
         notTTYSchedule: 1000,
       }, Presets.shades_classic)
 
       let skipped = 0
-      let failures = 0
+      let failed = 0
 
       function to_seq(suites: Suite[], test: Test): [number[], number] {
         let current = top_level
@@ -412,12 +412,12 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
           }
         }
         return {
-          failures: format(failures, "failure", "failures"),
+          failed: format(failed, "failed"),
           skipped: format(skipped, "skipped"),
         }
       }
 
-      progress.start(test_suite.length, 0, state())
+      progress.start(selected_tests.length, 0, state())
 
       type MetricKeys = "JSEventListeners" | "Nodes" | "Resources" | "LayoutCount" | "RecalcStyleCount" | "JSHeapUsedSize" | "JSHeapTotalSize"
       const metrics: {[key in MetricKeys]: number[]} = {
@@ -464,7 +464,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         }
       })()
 
-      function format_output(test_case: TestItem): string | null {
+      function format_output(test_case: TestCase): string | null {
         const [suites, test, status] = test_case
 
         if ((status.failure ?? false) || (status.timeout ?? false)) {
@@ -488,7 +488,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         }
       }
 
-      function append_report_out(test_case: TestItem): void {
+      function append_report_out(test_case: TestCase): void {
         if (out_stream != null) {
           const output = format_output(test_case)
           if (output != null) {
@@ -499,22 +499,28 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         }
       }
 
+      for (const test_case of all_tests) {
+        const [suites, test, status] = test_case
+
+        const baseline_name = encode(description(suites, test, "__"))
+        status.baseline_name = baseline_name
+
+        if (baseline_names.has(baseline_name)) {
+          status.errors.push("duplicated description")
+          status.failure = true
+        } else {
+          baseline_names.add(baseline_name)
+        }
+      }
+
       try {
-        for (const test_case of test_suite) {
+        for (const test_case of selected_tests) {
           const [suites, test, status] = test_case
 
           entries = []
           exceptions = []
 
-          const baseline_name = encode(description(suites, test, "__"))
-          status.baseline_name = baseline_name
-
-          if (baseline_names.has(baseline_name)) {
-            status.errors.push("duplicated description")
-            status.failure = true
-          } else {
-            baseline_names.add(baseline_name)
-          }
+          const baseline_name = status.baseline_name!
 
           if (test.skip) {
             status.skipped = true
@@ -699,7 +705,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
             skipped++
           }
           if ((status.failure ?? false) || (status.timeout ?? false)) {
-            failures++
+            failed++
           }
 
           append_report_out(test_case)
@@ -711,11 +717,11 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
 
       if (out_stream != null) {
         out_stream.write("\n")
-        out_stream.write(`Tests finished on ${new Date().toISOString()} with ${failures} failures.\n`)
+        out_stream.write(`Tests finished on ${new Date().toISOString()} with ${failed} failures.\n`)
         out_stream.end()
       }
 
-      for (const test_case of test_suite) {
+      for (const test_case of selected_tests) {
         const output = format_output(test_case)
         if (output != null) {
           console.log("")
@@ -724,7 +730,7 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
       }
 
       if (baselines_root != null) {
-        const results = test_suite.map(([suites, test, status]) => {
+        const results = selected_tests.map(([suites, test, status]) => {
           const {failure, image, image_diff, reference} = status
           return [descriptions(suites, test), {failure, image, image_diff, reference}]
         })
@@ -751,8 +757,19 @@ async function run_tests(ctx: TestRunContext): Promise<boolean> {
         }
       }
 
-      if (failures != 0) {
-        throw new Exit(1)
+      const passed = num_selected_tests - failed - skipped
+      const deselected = num_all_tests - num_selected_tests
+      const parts = {
+        failed: chalk.red(`${failed} failed`),
+        passed: chalk.green(`${passed} passed`),
+        skipped: chalk.yellow(`${skipped} skipped`),
+        deselected: chalk.magenta(`${deselected} deselected`),
+      }
+      const successful = `${parts.passed}, ${parts.skipped}, ${parts.deselected} of total ${num_all_tests} tests`
+      if (failed != 0) {
+        fail(`\n${parts.failed}, ${successful}`)
+      } else {
+        console.log(successful)
       }
     } finally {
       await Runtime.discardConsoleEntries()
