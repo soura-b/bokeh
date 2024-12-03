@@ -61,11 +61,18 @@ export class Hatch extends VisualProperties {
     return !(color == null || alpha == 0 || pattern == " " || pattern == "blank" || pattern == null)
   }
 
-  apply(ctx: Context2d, rule: CanvasFillRule = "nonzero"): boolean {
+  apply(ctx: Context2d, path_or_rule?: Path2D | CanvasFillRule, rule: CanvasFillRule = "nonzero"): boolean {
     const {doit} = this
     if (doit) {
       this.set_value(ctx)
-      ctx.layer.undo_transform(() => ctx.fill(rule))
+      ctx.layer.undo_transform(() => {
+        if (path_or_rule instanceof Path2D) {
+          const path = path_or_rule
+          ctx.fill(path, rule)
+        } else {
+          ctx.fill(path_or_rule ?? rule)
+        }
+      })
     }
     return doit
   }
@@ -230,11 +237,18 @@ export class HatchScalar extends VisualUniforms {
     return this._static_doit
   }
 
-  apply(ctx: Context2d, rule: CanvasFillRule = "nonzero"): boolean {
+  apply(ctx: Context2d, path_or_rule?: Path2D | CanvasFillRule, rule: CanvasFillRule = "nonzero"): boolean {
     const {doit} = this
     if (doit) {
       this.set_value(ctx)
-      ctx.layer.undo_transform(() => ctx.fill(rule))
+      ctx.layer.undo_transform(() => {
+        if (path_or_rule instanceof Path2D) {
+          const path = path_or_rule
+          ctx.fill(path, rule)
+        } else {
+          ctx.fill(path_or_rule ?? rule)
+        }
+      })
     }
     return doit
   }
@@ -395,11 +409,18 @@ export class HatchVector extends VisualUniforms {
     return true
   }
 
-  apply(ctx: Context2d, i: number, rule: CanvasFillRule = "nonzero"): boolean {
+  apply(ctx: Context2d, i: number, path_or_rule?: Path2D | CanvasFillRule, rule: CanvasFillRule = "nonzero"): boolean {
     const doit = this.v_doit(i)
     if (doit) {
       this.set_vectorize(ctx, i)
-      ctx.layer.undo_transform(() => ctx.fill(rule))
+      ctx.layer.undo_transform(() => {
+        if (path_or_rule instanceof Path2D) {
+          const path = path_or_rule
+          ctx.fill(path, rule)
+        } else {
+          ctx.fill(path_or_rule ?? rule)
+        }
+      })
     }
     return doit
   }
