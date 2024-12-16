@@ -9,6 +9,7 @@ import {PanTool} from "@bokehjs/models/tools/gestures/pan_tool"
 import {TapTool} from "@bokehjs/models/tools/gestures/tap_tool"
 import {build_view} from "@bokehjs/core/build_views"
 import {gridplot} from "@bokehjs/api/gridplot"
+import {ExamineTool, Plot, CustomAction, Legend, LegendItem, CustomJS, Range1d} from "@bokehjs/models"
 
 describe("Toolbar", () => {
 
@@ -197,6 +198,146 @@ describe("ToolbarView", () => {
       tbv.set_visibility(false)
       expect(tbv.model.autohide).to.be.true
       expect(tbv.visible).to.be.false
+    })
+  })
+
+  describe("should allow activation and deactivation", () => {
+    it("of ExamineTool", async () => {
+      const tool = new ExamineTool()
+      const toolbar = new Toolbar({tools: [tool]})
+      const plot = new Plot({toolbar})
+      const {view} = await display(plot)
+      const toolbar_view = view.owner.get_one(toolbar)
+      const tool_view = view.owner.get_one(tool)
+      const tool_button_view = toolbar_view.tool_button_views[0]
+      expect(tool_button_view.model.tool.active).to.be.false
+      expect(tool_view.dialog.model.visible).to.be.false
+      tool_button_view.tap()
+      await view.ready
+      expect(tool_button_view.model.tool.active).to.be.true
+      expect(tool_view.dialog.model.visible).to.be.true
+      tool_button_view.tap()
+      await view.ready
+      expect(tool_button_view.model.tool.active).to.be.false
+      expect(tool_view.dialog.model.visible).to.be.false
+    })
+
+    describe("of CustomAction", () => {
+      async function test(initial: boolean, fn: (legend: Legend, tool: CustomAction) => void) {
+        const legend = new Legend({
+          visible: initial,
+          items: [
+            new LegendItem({label: "Label"}),
+          ],
+        })
+        const tool = new CustomAction({
+          icon: ".bk-tool-icon-list",
+          active: initial,
+        })
+        fn(legend, tool)
+        const toolbar = new Toolbar({tools: [tool]})
+        const plot = new Plot({
+          toolbar,
+          center: [legend],
+          width: 200,
+          height: 100,
+          x_range: new Range1d({start: 0, end: 1}),
+          y_range: new Range1d({start: 0, end: 1}),
+        })
+        const {view} = await display(plot)
+        const toolbar_view = view.owner.get_one(toolbar)
+        const tool_button_view = toolbar_view.tool_button_views[0]
+        expect(tool_button_view.model.tool.active).to.be.equal(initial)
+        expect(legend.visible).to.be.equal(initial)
+        /**
+          Alternatively `await tap(tool_button_view.el)`, but it's slow
+          and unreliable (sometimes doesn't trigger, maybe due to page
+          scrolling or something like that).
+         */
+        tool_button_view.tap()
+        await view.ready
+        expect(tool_button_view.model.tool.active).to.be.equal(!initial)
+        expect(legend.visible).to.be.equal(!initial)
+        tool_button_view.tap()
+        await view.ready
+        expect(tool_button_view.model.tool.active).to.be.equal(initial)
+        expect(legend.visible).to.be.equal(initial)
+      }
+
+      describe("with JS callback and active_callback='auto'", () => {
+        const fn = (legend: Legend, tool: CustomAction) => {
+          tool.callback = () => {
+            legend.visible = !legend.visible
+          }
+          tool.active_callback = "auto"
+        }
+        it("and Legend initially not visible", async () => {
+          await test(false, fn)
+        })
+        it("and Legend initially visible", async () => {
+          await test(true, fn)
+        })
+      })
+
+      describe("with JS callback returning a boolean and active_callback=null", () => {
+        const fn = (legend: Legend, tool: CustomAction) => {
+          tool.callback = () => {
+            legend.visible = !legend.visible
+            return legend.visible
+          }
+          tool.active_callback = null
+        }
+        it("and Legend initially not visible", async () => {
+          await test(false, fn)
+        })
+        it("and Legend initially visible", async () => {
+          await test(true, fn)
+        })
+      })
+
+      describe("with JS callbacks", () => {
+        const fn = (legend: Legend, tool: CustomAction) => {
+          tool.callback = () => {
+            legend.visible = !legend.visible
+          }
+          tool.active_callback = () => {
+            return legend.visible
+          }
+        }
+        it("and Legend initially not visible", async () => {
+          await test(false, fn)
+        })
+        it("and Legend initially visible", async () => {
+          await test(true, fn)
+        })
+      })
+
+      describe("with CustomJS callbacks", () => {
+        const fn = (legend: Legend, tool: CustomAction) => {
+          tool.callback = new CustomJS({
+            args: {legend},
+            code: `
+            export default ({legend}) => {
+              legend.visible = !legend.visible
+            }
+            `,
+          })
+          tool.active_callback = new CustomJS({
+            args: {legend},
+            code: `
+            export default ({legend}) => {
+              return legend.visible
+            }
+            `,
+          })
+        }
+        it("and Legend initially not visible", async () => {
+          await test(false, fn)
+        })
+        it("and Legend initially visible", async () => {
+          await test(true, fn)
+        })
+      })
     })
   })
 
